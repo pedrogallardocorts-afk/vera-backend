@@ -1,79 +1,86 @@
-import express from "express";
-import multer from "multer";
-import fs from "fs";
-import cors from "cors";
-import OpenAI from "openai";
+const express = require("express");
+const cors = require("cors");
+const multer = require("multer");
+const OpenAI = require("openai");
 
 const app = express();
 
-app.use(cors());
+app.use(cors({
+  origin: "*",
+  methods: ["GET", "POST"],
+}));
 
 const upload = multer({
-  dest: "uploads/",
+  storage: multer.memoryStorage(),
 });
 
-const openai = new OpenAI({
+const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+app.get("/", (req, res) => {
+  res.send("Vera backend funcionando");
+});
+
 app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
-
   try {
-
-    const transcription =
-      await openai.audio.transcriptions.create({
-        file: fs.createReadStream(req.file.path),
-        model: "whisper-1",
+    if (!req.file) {
+      return res.status(400).json({
+        error: "No se recibió audio",
       });
+    }
 
-    const completion =
-      await openai.chat.completions.create({
-        model: "gpt-4.1-mini",
-        messages: [
-          {
-            role: "system",
-            content: `
-Eres Vera.
+    console.log("Audio recibido:", req.file.originalname);
+    console.log("MimeType:", req.file.mimetype);
 
-Especialista inmobiliaria en Barcelona.
+    const transcription = await client.audio.transcriptions.create({
+      file: await OpenAI.toFile(
+        req.file.buffer,
+        req.file.originalname
+      ),
+      model: "whisper-1",
+    });
 
-Habla de forma:
-- cercana
-- humana
-- sencilla
-- tranquila
+    const texto = transcription.text;
 
-NO des cifras exactas.
+    console.log("Texto:", texto);
 
-Da orientación general sobre la vivienda.
-`,
-          },
-          {
-            role: "user",
-            content: transcription.text,
-          },
-        ],
-      });
+    const completion = await client.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content:
+            "Eres Vera, una asesora inmobiliaria cercana y clara especializada en Barcelona. Responde de forma natural y útil.",
+        },
+        {
+          role: "user",
+          content: texto,
+        },
+      ],
+    });
+
+    const reply =
+      completion.choices[0].message.content;
 
     res.json({
-      transcript: transcription.text,
-      reply: completion.choices[0].message.content,
+      success: true,
+      transcription: texto,
+      reply,
     });
 
   } catch (error) {
-
     console.error(error);
 
     res.status(500).json({
-      error: "Error procesando audio",
+      error: error.message,
+      stack: error.stack,
     });
-
   }
-
 });
 
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log("Servidor funcionando");
+  console.log(`Servidor funcionando en puerto ${PORT}`);
 });
